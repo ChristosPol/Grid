@@ -47,3 +47,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Backtesting data
+/Data
+
+# Mac item
+.DS_Store
