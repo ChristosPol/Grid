@@ -50,6 +50,6 @@ rsconnect/
 
 # Backtesting data
 /Data
-
+/Backtesting/results
 # Mac item
 .DS_Store
