@@ -19,11 +19,6 @@ setorder(mean_percent_param, -V1)
 setorder(mean_percent_param_month, -V1)
 
 
-
-
-
-
-
 ggplot(data=mean_percent_param_month, aes(x = date, y = V1))+
   geom_point()
 

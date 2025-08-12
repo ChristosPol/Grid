@@ -82,58 +82,73 @@ daily_results <- foreach(p = 1:nrow(params),
                              grids[[i]] <- grid_tab
                            }
                            
-                           # ---- Entry logic ----
+                           # ---- Entry logic (Breakout / Reversion / Weak Breakout) ----
                            for (n in 1:length(grids)) {
                              block_df <- df[block_flag == n]
                              grid_tab <- grids[[n]]
                              
-                             # SHORT entries
-                             shorts <- grid_tab[position == "short"]
-                             idx <- c(); dates <- c()
-                             
-                             for (j in 1:nrow(shorts)) {
-                               price_level <- shorts$grid[j]
-                               entry_idx <- which(block_df$price <= price_level)[1]
+                             for (j in 1:nrow(grid_tab)) {
+                               price_level <- grid_tab$grid[j]
+                               pos_type <- grid_tab$position[j]
                                
-                               if (!is.na(entry_idx)) {
-                                 ema_buy_val <- block_df$ema_buy[entry_idx]
-                                 ema_sell_val <- block_df$ema_sell[entry_idx]
-                                 
-                                 if (!is.na(ema_buy_val) && !is.na(ema_sell_val)) {
-                                   if (params$type[p] == "breakout" && ema_sell_val > ema_buy_val * params$ema_ratio[p]) {
-                                     idx[j] <- block_df$global_index[entry_idx]; dates[j] <- block_df$Date_POSIXct[entry_idx]
-                                   } else if (params$type[p] == "reversion" && ema_sell_val < ema_buy_val * params$ema_ratio[p]) {
-                                     idx[j] <- block_df$global_index[entry_idx]; dates[j] <- block_df$Date_POSIXct[entry_idx]
-                                   } else { idx[j] <- NA; dates[j] <- NA }
-                                 } else { idx[j] <- NA; dates[j] <- NA }
-                               } else { idx[j] <- NA; dates[j] <- NA }
-                             }
-                             grid_tab[position == "short", interval_enter := dates]
-                             grid_tab[position == "short", idx_enter := idx]
-                             
-                             # LONG entries
-                             longs <- grid_tab[position == "long"]
-                             idx <- c(); dates <- c()
-                             
-                             for (j in 1:nrow(longs)) {
-                               price_level <- longs$grid[j]
-                               entry_idx <- which(block_df$price >= price_level)[1]
+                               # ---- SHORT grids (price below init) ----
+                               if (pos_type == "short") {
+                                 entry_idx <- which(block_df$price <= price_level)[1]
+                                 if (!is.na(entry_idx)) {
+                                   ema_buy_val <- block_df$ema_buy[entry_idx]
+                                   ema_sell_val <- block_df$ema_sell[entry_idx]
+                                   
+                                   if (!is.na(ema_buy_val) && !is.na(ema_sell_val)) {
+                                     
+                                     if (params$type[p] == "breakout" && ema_sell_val > ema_buy_val) {
+                                       # Breakout SHORT
+                                       grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
+                                       grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
+                                       
+                                     } else if (params$type[p] == "reversion" && ema_buy_val > ema_sell_val) {
+                                       # Reversion LONG (fade drop if buyers stronger)
+                                       grid_tab$position[j] <- "long"
+                                       grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
+                                       grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
+                                       
+                                     } else if (params$type[p] == "weak_breakout" && ema_buy_val > ema_sell_val) {
+                                       # Weak breakout SHORT (follow drop even if buyers stronger)
+                                       grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
+                                       grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
+                                     }
+                                   }
+                                 }
+                               }
                                
-                               if (!is.na(entry_idx)) {
-                                 ema_buy_val <- block_df$ema_buy[entry_idx]
-                                 ema_sell_val <- block_df$ema_sell[entry_idx]
-                                 
-                                 if (!is.na(ema_buy_val) && !is.na(ema_sell_val)) {
-                                   if (params$type[p] == "breakout" && ema_buy_val > ema_sell_val * params$ema_ratio[p]) {
-                                     idx[j] <- block_df$global_index[entry_idx]; dates[j] <- block_df$Date_POSIXct[entry_idx]
-                                   } else if (params$type[p] == "reversion" && ema_buy_val < ema_sell_val * params$ema_ratio[p]) {
-                                     idx[j] <- block_df$global_index[entry_idx]; dates[j] <- block_df$Date_POSIXct[entry_idx]
-                                   } else { idx[j] <- NA; dates[j] <- NA }
-                                 } else { idx[j] <- NA; dates[j] <- NA }
-                               } else { idx[j] <- NA; dates[j] <- NA }
+                               # ---- LONG grids (price above init) ----
+                               if (pos_type == "long") {
+                                 entry_idx <- which(block_df$price >= price_level)[1]
+                                 if (!is.na(entry_idx)) {
+                                   ema_buy_val <- block_df$ema_buy[entry_idx]
+                                   ema_sell_val <- block_df$ema_sell[entry_idx]
+                                   
+                                   if (!is.na(ema_buy_val) && !is.na(ema_sell_val)) {
+                                     
+                                     if (params$type[p] == "breakout" && ema_buy_val > ema_sell_val) {
+                                       # Breakout LONG
+                                       grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
+                                       grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
+                                       
+                                     } else if (params$type[p] == "reversion" && ema_sell_val > ema_buy_val) {
+                                       # Reversion SHORT (fade rally if sellers stronger)
+                                       grid_tab$position[j] <- "short"
+                                       grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
+                                       grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
+                                       
+                                     } else if (params$type[p] == "weak_breakout" && ema_sell_val > ema_buy_val) {
+                                       # Weak breakout LONG (follow rally even if sellers stronger)
+                                       grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
+                                       grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
+                                     }
+                                   }
+                                 }
+                               }
                              }
-                             grid_tab[position == "long", interval_enter := dates]
-                             grid_tab[position == "long", idx_enter := idx]
                              
                              grids[[n]] <- grid_tab
                            }
@@ -202,7 +217,8 @@ daily_results <- foreach(p = 1:nrow(params),
                              max_drawdown = min(all_trades$res),
                              sl_triggered = sum(all_trades$SL_act == TRUE),
                              tp_triggered = sum(all_trades$SL_act == FALSE),
-                             date = selected_dates
+                             date = selected_dates,
+                             strategy_type = params$type[p]   # keep track of which strategy
                            ))
                          }
 # -------- End Parallel Loop --------
