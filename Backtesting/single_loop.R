@@ -1,148 +1,133 @@
 # -------- Single Loop --------
+library(data.table)
+library(TTR)
+
 daily_results <- list()
 
-for(p in 1:nrow(params)){
-  # Add volume columns
+for (p in 1:nrow(params)) {
+  
+  # ---- Precompute per-tick volumes/EMAs ----
   df[, cost := price * volume]
   df[buy_sell == "b", buy_vol := volume]
   df[is.na(buy_vol), buy_vol := 0]
   df[buy_sell == "s", sell_vol := volume]
   df[is.na(sell_vol), sell_vol := 0]
   
-  # -------- Param loop --------
-  df[, ema_buy := EMA(buy_vol, n = params$ema[p])]
+  df[, ema_buy  := EMA(buy_vol,  n = params$ema[p])]
   df[, ema_sell := EMA(sell_vol, n = params$ema[p])]
   
   pos_step <- seq(params$pos_start[p], params$end[p], params$by[p])
   neg_step <- -1 * seq(params$pos_start[p], params$end[p], params$by[p])
   
-  hours_reset <- params$reset[p]
-  number_grids <- 24 * 7 / hours_reset  
+  hours_reset  <- params$reset[p]
+  number_grids <- 24 * 7 / hours_reset  # (kept if you use it later)
   
-  df$elapsed_hours <- as.numeric(difftime(df$Date_POSIXct, df$Date_POSIXct[1], units = "hours"))
-  df$block_flag <- floor(df$elapsed_hours / hours_reset)
-  df$flag_change <- c(TRUE, diff(df$block_flag) > 0)
-  df$block_flag <- df$block_flag + 1
-  df$global_index <- 1:nrow(df)
+  # ---- Block partitioning ----
+  df[, elapsed_hours := as.numeric(difftime(Date_POSIXct, Date_POSIXct[1], units = "hours"))]
+  df[, block_flag    := floor(elapsed_hours / hours_reset)]
+  df[, flag_change   := c(TRUE, diff(block_flag) > 0)]
+  df[, block_flag    := block_flag + 1L]
+  df[, global_index  := .I]
   
   init <- data.table(
     indeces_init = which(df$flag_change),
     prices_init  = df$price[which(df$flag_change)]
   )
-  init[, indeces_end := lead(init$indeces_init - 1, 1)]
+  init[, indeces_end := shift(indeces_init, type = "lead") - 1L]
   init[is.na(indeces_end), indeces_end := nrow(df)]
   
   # ---- Create grids ----
   grids <- list()
   all_chars <- c(LETTERS, 0:9)
-  str_len <- 20
+  str_len   <- 20
   
   for (i in 1:nrow(init)) {
     spec_price <- init$prices_init[i]
-    index_end <- init$indeces_end[i]
-    index_start <- init$indeces_init[i]
+    index_end  <- init$indeces_end[i]
+    index_start<- init$indeces_init[i]
     
     grid_tab <- data.table(
-      batch = sample(x = 1:10E5, 1),
-      grid = c(spec_price + spec_price * pos_step,
-               spec_price + spec_price * neg_step),
+      batch      = sample(x = 1:10E5, 1),
+      grid       = c(spec_price + spec_price * pos_step,
+                     spec_price + spec_price * neg_step),
       init_price = spec_price,
       status_enter = "open",
-      status_exit = "open",
-      idx_start = index_start,
-      idx_end = index_end,
-      idx_enter = NA_integer_,
-      idx_exit = NA_integer_,
+      status_exit  = "open",
+      idx_start    = index_start,
+      idx_end      = index_end,
+      idx_enter    = NA_integer_,
+      idx_exit     = NA_integer_,
       actual_price_exit = NA_real_
     )
+    
     setorder(grid_tab, -grid)
     
     grid_tab[, `:=`(
-      interval_enter = as.POSIXct(NA),
-      interval_exit = as.POSIXct(NA),
-      trade_id = replicate(nrow(grid_tab), paste(sample(all_chars, str_len, replace = TRUE), collapse = "")),
+      # Do NOT pre-create POSIXct columns (tz mismatch risk).
+      # We'll create them later from df$Date_POSIXct.
+      trade_id = replicate(.N, paste(sample(all_chars, str_len, replace = TRUE), collapse = "")),
       position = ifelse(grid > spec_price, "long", "short"),
-      SL_act = FALSE,
-      bet = 50
+      SL_act   = FALSE,
+      bet      = 50
     )]
     
-    grid_tab[position == "short", exits := lead(grid, 1)]
+    # Take-profits per grid
+    grid_tab[position == "short", exits := shift(grid, type = "lead")]
     grid_tab[position == "short" & is.na(exits), exits := grid - grid * params$by[p]]
     
-    grid_tab[position == "long", exits := lag(grid, 1)]
+    grid_tab[position == "long", exits := shift(grid, type = "lag")]
     grid_tab[position == "long" & is.na(exits), exits := grid + grid * params$by[p]]
     
     grid_tab[, tp := ((exits - grid) / grid) * 100]
-    grid_tab[position == "short", tp := -1 * tp]
+    grid_tab[position == "short", tp := -tp]
     
-    grid_tab[position == "long", SL_price := grid - grid * params$sl[p]]
+    # Stop-loss levels
+    grid_tab[position == "long",  SL_price := grid - grid * params$sl[p]]
     grid_tab[position == "short", SL_price := grid + grid * params$sl[p]]
     
     grids[[i]] <- grid_tab
   }
   
   # ---- Entry logic (Breakout / Reversion / Weak Breakout) ----
-  for (n in 1:length(grids)) {
+  for (n in seq_along(grids)) {
     block_df <- df[block_flag == n]
-    grid_tab <- grids[[n]]
+    grid_tab <- copy(grids[[n]])
     
     for (j in 1:nrow(grid_tab)) {
       price_level <- grid_tab$grid[j]
-      pos_type <- grid_tab$position[j]
+      pos_type    <- grid_tab$position[j]
       
-      # ---- SHORT grids (price below init) ----
       if (pos_type == "short") {
         entry_idx <- which(block_df$price <= price_level)[1]
         if (!is.na(entry_idx)) {
-          ema_buy_val <- block_df$ema_buy[entry_idx]
+          ema_buy_val  <- block_df$ema_buy[entry_idx]
           ema_sell_val <- block_df$ema_sell[entry_idx]
-          
           if (!is.na(ema_buy_val) && !is.na(ema_sell_val)) {
-            
             if (params$type[p] == "breakout" && ema_sell_val > ema_buy_val) {
-              # Breakout SHORT
               grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
-              grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
-              
             } else if (params$type[p] == "reversion" && ema_buy_val > ema_sell_val) {
-              # Reversion LONG (fade drop if buyers stronger)
-              grid_tab$position[j] <- "long"
+              grid_tab$position[j]  <- "long"
               grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
-              grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
-              
             } else if (params$type[p] == "weak_breakout" && ema_buy_val > ema_sell_val) {
-              # Weak breakout SHORT (follow drop even if buyers stronger)
               grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
-              grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
             }
           }
         }
       }
       
-      # ---- LONG grids (price above init) ----
       if (pos_type == "long") {
         entry_idx <- which(block_df$price >= price_level)[1]
         if (!is.na(entry_idx)) {
-          ema_buy_val <- block_df$ema_buy[entry_idx]
+          ema_buy_val  <- block_df$ema_buy[entry_idx]
           ema_sell_val <- block_df$ema_sell[entry_idx]
-          
           if (!is.na(ema_buy_val) && !is.na(ema_sell_val)) {
-            
             if (params$type[p] == "breakout" && ema_buy_val > ema_sell_val) {
-              # Breakout LONG
               grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
-              grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
-              
             } else if (params$type[p] == "reversion" && ema_sell_val > ema_buy_val) {
-              # Reversion SHORT (fade rally if sellers stronger)
-              grid_tab$position[j] <- "short"
+              grid_tab$position[j]  <- "short"
               grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
-              grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
-              
             } else if (params$type[p] == "weak_breakout" && ema_sell_val > ema_buy_val) {
-              # Weak breakout LONG (follow rally even if sellers stronger)
               grid_tab$idx_enter[j] <- block_df$global_index[entry_idx]
-              grid_tab$interval_enter[j] <- block_df$Date_POSIXct[entry_idx]
             }
           }
         }
@@ -154,18 +139,16 @@ for(p in 1:nrow(params)){
   
   # ---- Collect trades ----
   all_trades <- rbindlist(grids)
-  all_trades <- all_trades[!is.na(interval_enter)]
+  all_trades <- all_trades[!is.na(idx_enter)]
   
-  if (nrow(all_trades) == 0) {
-    next   # skip if no trades
-  }
+  if (nrow(all_trades) == 0) next
   
   # ---- Exit logic ----
   for (i in 1:nrow(all_trades)) {
-    idx_ent <- all_trades$idx_enter[i]
-    idx_end <- all_trades$idx_end[i]
-    pos <- all_trades$position[i]
-    grid_exit <- all_trades$exits[i]
+    idx_ent  <- all_trades$idx_enter[i]
+    idx_end  <- all_trades$idx_end[i]
+    pos      <- all_trades$position[i]
+    grid_exit<- all_trades$exits[i]
     sl_price <- all_trades$SL_price[i]
     
     price_path <- df[idx_ent:idx_end, price]
@@ -179,7 +162,7 @@ for(p in 1:nrow(params)){
       if (!is.na(tmp)) idx_tp <- index_path[tmp]
       tmp <- which(price_path >= sl_price)[1]
       if (!is.na(tmp)) idx_sl <- index_path[tmp]
-    } else if (pos == "long") {
+    } else { # long
       tmp <- which(price_path >= grid_exit)[1]
       if (!is.na(tmp)) idx_tp <- index_path[tmp]
       tmp <- which(price_path <= sl_price)[1]
@@ -188,7 +171,7 @@ for(p in 1:nrow(params)){
     
     if (!is.na(idx_tp) & !is.na(idx_sl)) {
       if (idx_sl < idx_tp) { all_trades$idx_exit[i] <- idx_sl; all_trades$SL_act[i] <- TRUE }
-      else { all_trades$idx_exit[i] <- idx_tp }
+      else                 { all_trades$idx_exit[i] <- idx_tp }
     } else if (!is.na(idx_sl)) {
       all_trades$idx_exit[i] <- idx_sl; all_trades$SL_act[i] <- TRUE
     } else if (!is.na(idx_tp)) {
@@ -198,12 +181,15 @@ for(p in 1:nrow(params)){
     }
   }
   
-  # ---- Finalize results ----
-  all_trades[, interval_exit := df$Date_POSIXct[idx_exit]]
-  all_trades[, actual_price_exit := df$price[idx_exit]]
+  # ---- Finalize results (timestamps now inherit tz from df$Date_POSIXct) ----
+  all_trades[, `:=`(
+    interval_enter     = df$Date_POSIXct[idx_enter],
+    interval_exit      = df$Date_POSIXct[idx_exit],
+    actual_price_exit  = df$price[idx_exit]
+  )]
   
   all_trades[, res := ((actual_price_exit - grid) / grid) * 100]
-  all_trades[position == "short", res := -1 * res]
+  all_trades[position == "short", res := -res]
   all_trades[, res := res - 0.10]  # fee/slippage
   
   daily_results[[p]] <- all_trades

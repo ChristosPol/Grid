@@ -1,6 +1,8 @@
 rm(list=ls())
+options(scipen = 999)
 gc()
 # 0.01_0.01_0.2_4_0.02_1_5_breakout
+# 0.002_0.01_0.1_4_0.01_1_5_breakout
 # Load libraries
 library(data.table)
 library(dplyr)
@@ -9,9 +11,9 @@ library(ggpubr)
 setDTthreads(1)
 # -------- Load Data --------
 # pair <- "XXBTZUSD"
-pair <- "BONKUSD"
-# pair <- "ALGOUSD"
-# pair <- "AVAXUSD"
+pair <- "BONKUSD" # works
+# pair <- "PEPEUSD" # works
+# pair <- "XXLMZUSD"
 data_path <- "Data"
 pair_data_results <- paste(data_path, pair, sep ="/")
 file <- paste0(paste(pair_data_results, pair, sep = "/"), ".csv.gz")
@@ -21,11 +23,11 @@ colnames(frame) <- c("price", "volume", "epoch_time", "buy_sell", "market_limit"
                      "trade_id", "last_id", "Date_POSIXct", "Time", "Date", "Hour")
 
 # -------- Parameters --------
-by <- data.table(by = c(0.01), flag =1)
+by <- data.table(by = c(0.002), flag =1)
 pos_start <- data.table(pos_start = c(0.01), flag =1)
-end <- data.table(end = c(0.2), flag =1)
+end <- data.table(end = c(0.1), flag =1)
 reset <- data.table(reset = c(4), flag =1)
-sl <- data.table(sl = c(0.02), flag =1)
+sl <- data.table(sl = c(0.01), flag =1)
 ema <- data.table(ema = c(5), flag =1)
 ema_ratio <- data.table(ema_ratio = c(1), flag = 1)
 type <- data.table(type = c("breakout"), flag = 1)
@@ -49,7 +51,7 @@ params <- left_join(by, pos_start, relationship =
 n_dates <- 1
 
 # Weekly batches
-n_days <- 30
+n_days <- 6
 vector_date <- unique(frame$Date)
 selected_dates <- sample(vector_date, size = n_dates, replace = F)
 # selected_dates <- as.Date("2023-01-01")
@@ -108,16 +110,74 @@ ggplot(plot_dt, aes(x = interval_exit)) +
 
 
 # # Vis
-# p1 <- ggplot(data = df, aes(x = Date_POSIXct, y = price)) +
-#   geom_line() +
-#   theme_pubclean() +
-#   geom_point(data = all_trades[position == "long"], aes(x = interval_enter, y = grid), fill = "darkgreen", color = "darkgreen", size = 1.5, shape = 24, alpha = 1) +
-#   geom_point(data = all_trades[position == "short"], aes(x = interval_enter, y = grid), fill = "darkred", color = "darkred", size = 1.5, shape = 25, alpha = 1) +
-#   
-#   geom_point(data = all_trades[SL_act == FALSE], aes(x = interval_exit, y = actual_price_exit), color = "orange", size = 1, shape = 8, alpha = 1) +
-#   geom_point(data = all_trades[SL_act == TRUE], aes(x = interval_exit, y = actual_price_exit), color = "blue", size = 1, shape = 8,  alpha = 1)
+p1 <- ggplot(data = df, aes(x = Date_POSIXct, y = price)) +
+  geom_line() +
+  theme_pubclean() +
+  geom_point(data = all_trades[position == "long"], aes(x = interval_enter, y = grid), fill = "darkgreen", color = "darkgreen", size = 1.5, shape = 24, alpha = 1) +
+  geom_point(data = all_trades[position == "short"], aes(x = interval_enter, y = grid), fill = "darkred", color = "darkred", size = 1.5, shape = 25, alpha = 1) +
+
+  geom_point(data = all_trades[SL_act == FALSE], aes(x = interval_exit, y = actual_price_exit), color = "orange", size = 1, shape = 8, alpha = 1) +
+  geom_point(data = all_trades[SL_act == TRUE], aes(x = interval_exit, y = actual_price_exit), color = "blue", size = 1, shape = 8,  alpha = 1)
 # 
 # 
-# p1
+p1
 # 
 # all_results
+
+
+
+
+
+
+
+
+
+
+
+grids_dt <- rbindlist(grids)
+grid_segments <- grids_dt[!is.na(idx_start) & !is.na(idx_end),
+                          .(x    = df$Date_POSIXct[idx_start],
+                            xend = df$Date_POSIXct[idx_end],
+                            y    = grid,
+                            yend = grid,
+                            position)
+]
+
+library(ggplot2)
+# theme_pubclean() is from ggpubr
+library(ggpubr)
+
+ggplot(data = df, aes(x = Date_POSIXct, y = price)) +
+  geom_line() +
+  theme_pubclean() +
+  
+  # --- GRID LINES AS SEGMENTS ---
+  geom_segment(
+    data = grid_segments,
+    aes(x = x, xend = xend, y = y, yend = y, color = position),
+    linewidth = 0.25, alpha = 0.7, inherit.aes = FALSE
+  ) +
+  scale_color_manual(values = c(long = "darkgreen", short = "darkred")) +
+  
+  # --- Your trade markers ---
+  geom_point(
+    data = all_trades[position == "long"],
+    aes(x = interval_enter, y = grid),
+    fill = "darkgreen", color = "darkgreen", size = 1.5, shape = 24, alpha = 1
+  ) +
+  geom_point(
+    data = all_trades[position == "short"],
+    aes(x = interval_enter, y = grid),
+    fill = "darkred", color = "darkred", size = 1.5, shape = 25, alpha = 1
+  ) +
+  geom_point(
+    data = all_trades[SL_act == FALSE],
+    aes(x = interval_exit, y = actual_price_exit),
+    color = "orange", size = 1, shape = 8, alpha = 1
+  ) +
+  geom_point(
+    data = all_trades[SL_act == TRUE],
+    aes(x = interval_exit, y = actual_price_exit),
+    color = "blue", size = 1, shape = 8, alpha = 1
+  )
+
