@@ -3,7 +3,7 @@ library(data.table)
 library(TTR)
 
 daily_results <- list()
-
+p <- 1
 for (p in 1:nrow(params)) {
   
   # ---- Precompute per-tick volumes/EMAs ----

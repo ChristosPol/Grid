@@ -1,36 +1,72 @@
 rm(list=ls())
 options(scipen = 999)
 gc()
-# 0.01_0.01_0.2_4_0.02_1_5_breakout
-# 0.002_0.01_0.1_4_0.01_1_5_breakout
+# 0.002_0.02_0.05_24_0.025_1_200_breakout
+
 # Load libraries
 library(data.table)
 library(dplyr)
 library(TTR)
 library(ggpubr)
+library(lubridate)
+
 setDTthreads(1)
 # -------- Load Data --------
 # pair <- "XXBTZUSD"
-pair <- "BONKUSD" # works
+pair <- "XETHZUSD" # works
 # pair <- "PEPEUSD" # works
-# pair <- "XXLMZUSD"
+# pair <- "1INCHUSD"
+
+# Uncomment
 data_path <- "Data"
 pair_data_results <- paste(data_path, pair, sep ="/")
 file <- paste0(paste(pair_data_results, pair, sep = "/"), ".csv.gz")
 frame <- fread(file)
-
 colnames(frame) <- c("price", "volume", "epoch_time", "buy_sell", "market_limit","misc",
                      "trade_id", "last_id", "Date_POSIXct", "Time", "Date", "Hour")
 
+df <- setDT(read.csv("~/Repositories/Private/Grid/Data/kraken_futures_trades (3).csv"))
+
+View(df[, .N, by = product_id])
+unique(df$product_id)
+
+# df <- df[product_id == "PF_BONKUSD"]
+# # df <- df[product_id == "PF_LINKUSD"]
+# # df <- df[product_id == "PF_ADAUSD"]
+# # df <- df[product_id == "PF_QTUMUSD"]
+# # df <- df[product_id == "PF_LSKUSD"]
+# # df <- df[product_id == "PF_BONKUSD"]
+# colnames(df) <- c("time_ms", "Date_POSIXct", "price", "volume", "buy_sell","product_id",
+#                      "seq")
+# df[, Date_POSIXct := ymd_hms(Date_POSIXct)]
+# setorder(df, Date_POSIXct)
+# df[, buy_sell := ifelse(buy_sell == "sell", "s", "b")]
+# 0.01_0.002_0.05_24_0.03_1_200_breakout
 # -------- Parameters --------
-by <- data.table(by = c(0.002), flag =1)
-pos_start <- data.table(pos_start = c(0.01), flag =1)
-end <- data.table(end = c(0.1), flag =1)
-reset <- data.table(reset = c(4), flag =1)
-sl <- data.table(sl = c(0.01), flag =1)
-ema <- data.table(ema = c(5), flag =1)
+# 0.01_0.002_0.05_24_0.03_1_200_breakout
+by <- data.table(by = c(0.01), flag =1)
+pos_start <- data.table(pos_start = c(0.002), flag =1)
+end <- data.table(end = c(0.05), flag =1)
+reset <- data.table(reset = c(24), flag =1)
+# reset <- data.table(reset = c(24), flag =1)
+sl <- data.table(sl = c(0.03), flag =1)
+ema <- data.table(ema = c(200), flag =1)
 ema_ratio <- data.table(ema_ratio = c(1), flag = 1)
 type <- data.table(type = c("breakout"), flag = 1)
+
+
+
+# by <- data.table(by = c(0.002), flag =1)
+# pos_start <- data.table(pos_start = c(0.03), flag =1)
+# end <- data.table(end = c(0.2), flag =1)
+# reset <- data.table(reset = c(4), flag =1)
+# # reset <- data.table(reset = c(24), flag =1)
+# sl <- data.table(sl = c(0.01), flag =1)
+# ema <- data.table(ema = c(200), flag =1)
+# ema_ratio <- data.table(ema_ratio = c(1), flag = 1)
+# type <- data.table(type = c("breakout"), flag = 1)
+
+
 
 params <- left_join(by, pos_start, relationship =
                       "many-to-many") %>%
@@ -47,16 +83,16 @@ params <- left_join(by, pos_start, relationship =
   left_join(type, relationship =
               "many-to-many")
 
-# How many weeks should we backtest
+# # How many weeks should we backtest
 n_dates <- 1
 
 # Weekly batches
-n_days <- 6
+n_days <- 600
 vector_date <- unique(frame$Date)
-selected_dates <- sample(vector_date, size = n_dates, replace = F)
-# selected_dates <- as.Date("2023-01-01")
-
-# Pick subframe
+# selected_dates <- sample(vector_date, size = n_dates, replace = F)
+selected_dates <- as.Date("2023-01-01")
+# 
+# # Pick subframe
 df <- frame[Date >= selected_dates & Date <= selected_dates + n_days]
 
 
@@ -82,10 +118,10 @@ all_results <- cbind(
   win_rate = mean(all_trades$res > 0),
   max_drawdown = min(all_trades$res),
   sl_triggered = sum(all_trades$SL_act == TRUE),
-  tp_triggered = sum(all_trades$SL_act == FALSE),
-  date = selected_dates
+  tp_triggered = sum(all_trades$SL_act == FALSE)
+  # date = selected_dates
 )
-
+all_results
 
 # Compute cumulative returns
 all_trades[, cum_return := cumsum(res)]
@@ -119,20 +155,7 @@ p1 <- ggplot(data = df, aes(x = Date_POSIXct, y = price)) +
   geom_point(data = all_trades[SL_act == FALSE], aes(x = interval_exit, y = actual_price_exit), color = "orange", size = 1, shape = 8, alpha = 1) +
   geom_point(data = all_trades[SL_act == TRUE], aes(x = interval_exit, y = actual_price_exit), color = "blue", size = 1, shape = 8,  alpha = 1)
 # 
-# 
 p1
-# 
-# all_results
-
-
-
-
-
-
-
-
-
-
 
 grids_dt <- rbindlist(grids)
 grid_segments <- grids_dt[!is.na(idx_start) & !is.na(idx_end),
@@ -159,6 +182,9 @@ ggplot(data = df, aes(x = Date_POSIXct, y = price)) +
   ) +
   scale_color_manual(values = c(long = "darkgreen", short = "darkred")) +
   
+  
+  
+  
   # --- Your trade markers ---
   geom_point(
     data = all_trades[position == "long"],
@@ -180,4 +206,6 @@ ggplot(data = df, aes(x = Date_POSIXct, y = price)) +
     aes(x = interval_exit, y = actual_price_exit),
     color = "blue", size = 1, shape = 8, alpha = 1
   )
+
+all_trades
 

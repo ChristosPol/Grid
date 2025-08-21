@@ -207,6 +207,8 @@ daily_results <- foreach(p = 1:nrow(params),
                            all_trades[position == "short", res := -1 * res]
                            all_trades[, res := res - 0.10]  # fee/slippage
                            
+                           
+                           
                            return(cbind(
                              params[p, ],
                              result_percent = sum(all_trades$res),
@@ -217,7 +219,8 @@ daily_results <- foreach(p = 1:nrow(params),
                              max_drawdown = min(all_trades$res),
                              sl_triggered = sum(all_trades$SL_act == TRUE),
                              tp_triggered = sum(all_trades$SL_act == FALSE),
-                             date = selected_dates,
+                             RoMaD= sum(all_trades$res)/abs(min(all_trades$res)),
+                             # date = selected_dates,
                              strategy_type = params$type[p]   # keep track of which strategy
                            ))
                          }
